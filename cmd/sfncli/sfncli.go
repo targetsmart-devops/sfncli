@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/sfn/sfniface"
 	"golang.org/x/time/rate"
 	"gopkg.in/Clever/kayvee-go.v6/logger"
+	"github.com/ivpusic/grpool"
 )
 
 var log = logger.New("sfncli")
@@ -29,6 +30,8 @@ var Version string
 func main() {
 	activityName := flag.String("activityname", "", "The activity name to register with AWS Step Functions. $VAR and ${VAR} env variables are expanded.")
 	workerName := flag.String("workername", "", "The worker name to send to AWS Step Functions when processing a task. Environment variables are expanded. The magic string MAGIC_ECS_TASK_ARN will be expanded to the ECS task ARN via the metadata service.")
+	numWorkers := flag.Int("parallel", 1, "The maximum number of command line subprocesses to execute concurrently")
+	
 	cmd := flag.String("cmd", "", "The command to run to process activity tasks.")
 	region := flag.String("region", "", "The AWS region to send Step Function API calls. Defaults to AWS_REGION.")
 	cloudWatchRegion := flag.String("cloudwatchregion", "", "The AWS region to report metrics. Defaults to the value of the region flag.")
@@ -78,6 +81,11 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	pool := grpool.NewPool(*numWorkers, *numWorkers)
+	// release resources used by pool
+	defer pool.Release()
+	log.Info(fmt.Sprintf("Initializing worker pool of size %v", *numWorkers))
 
 	mainCtx, mainCtxCancel := context.WithCancel(context.Background())
 	c := make(chan os.Signal, 1)
@@ -164,18 +172,20 @@ func main() {
 				}
 				log.InfoD("heartbeat-end", logger.M{"token": token})
 			}()
+			
+			pool.JobQueue <- func() {
+				// Run the command. Treat unprocessed args (flag.Args()) as additional args to
+				// send to the command on every invocation of the command
+				taskRunner := NewTaskRunner(*cmd, sfnapi, token, *workDirectory)
+				err = taskRunner.Process(taskCtx, flag.Args(), input)
+				if err != nil {
+				   taskCtxCancel()
+				}
 
-			// Run the command. Treat unprocessed args (flag.Args()) as additional args to
-			// send to the command on every invocation of the command
-			taskRunner := NewTaskRunner(*cmd, sfnapi, token, *workDirectory)
-			err = taskRunner.Process(taskCtx, flag.Args(), input)
-			if err != nil {
+				// success!
 				taskCtxCancel()
-				continue
 			}
 
-			// success!
-			taskCtxCancel()
 		}
 	}
 }
