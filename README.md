@@ -11,6 +11,8 @@ Usage of sfncli:
     	The activity name to register with AWS Step Functions. $VAR and ${VAR} env variables are expanded.
   -cmd string
     	The command to run to process activity tasks.
+  -parallel int
+      The maximum number of command line subprocesses to execute concurrently. Defaults to 1
   -region string
     	The AWS region to send Step Function API calls. Defaults to AWS_REGION.
   -cloudwatchregion string
